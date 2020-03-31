@@ -1,6 +1,7 @@
 package main
 
 import (
+	"./ProcessTools"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,20 +10,20 @@ import (
 	"github.com/google/gopacket/pcap"
 	"log"
 	"net"
-	"os"
 	"time"
 )
 
 var (
-	downStreamDataSize = 0  // 单位时间内下行的总字节数
-	upStreamDataSize   = 0  // 单位时间内上行的总字节数
-	deviceName        = flag.String("i", "eth0", "network interface device name") // 要监控的网卡名称
+	downStreamDataSize   = 0                                                         // 单位时间内下行的总字节数
+	upStreamDataSize     = 0                                                         // 单位时间内上行的总字节数
+	overwhelmingCount    = 0                                                         // error count
+	deviceName           = flag.String("i", "eth0", "network interface device name") // 要监控的网卡名称
+	minimumDownloadSpeed = flag.Float64("d", 100.0, "minimum download speed")
+	maxmumUploadSpeed    = flag.Float64("u", 5000.0, "maxmum upload speed")
+	maxmumFailCount      = flag.Int("f", 10, "maxmum fail count")
 )
 
-
-
-func main(){
-
+func main() {
 	flag.Parse()
 
 	// Find all devices
@@ -71,12 +72,11 @@ func main(){
 			if ethernet.DstMAC.String() == macAddr {
 				downStreamDataSize += len(packet.Data()) // 统计下行封包总大小
 			} else {
-				upStreamDataSize += len(packet.Data())   // 统计上行封包总大小
+				upStreamDataSize += len(packet.Data()) // 统计上行封包总大小
 			}
 		}
 	}
 }
-
 
 // 获取网卡的IPv4地址
 func findDeviceIpv4(device pcap.Interface) string {
@@ -116,7 +116,26 @@ func findMacAddrByIp(ip string) (string, error) {
 // 每一秒计算一次该秒内的数据包大小平均值，并将下载、上传总量置零
 func monitor() {
 	for {
-		os.Stdout.WriteString(fmt.Sprintf("\rDown:%.2fkb/s \t Up:%.2fkb/s", float32(downStreamDataSize)/1024/1, float32(upStreamDataSize)/1024/1))
+		//os.Stdout.WriteString(fmt.Sprintf("\rDown:%.2fkb/s \t Up:%.2fkb/s", float32(downStreamDataSize)/1024/1, float32(upStreamDataSize)/1024/1))
+		downloadSpeed := float64(downStreamDataSize) / 1024 / 1
+		uploadSpeed := float64(upStreamDataSize) / 1024 / 1
+		if downloadSpeed < *minimumDownloadSpeed && uploadSpeed > *maxmumUploadSpeed {
+			overwhelmingCount++
+			log.Println(fmt.Sprintf("AbNormal Speed %d  Down:%.2fkb/s \t Up:%.2fkb/s", overwhelmingCount, downloadSpeed, uploadSpeed))
+		} else {
+			overwhelmingCount = 0
+		}
+		if time.Now().Second() == 0 {
+			log.Println(fmt.Sprintf("Down:%.2fkb/s \t Up:%.2fkb/s", downloadSpeed, uploadSpeed))
+		}
+		if overwhelmingCount > *maxmumFailCount {
+			proc, _ := ProcessTools.GetProc("udp2raw_amd64")
+			if proc != nil {
+				ProcessTools.StopProc(proc)
+				ProcessTools.StartProc("/root/udp/", "udp2raw_amd64 -s -l 0.0.0.0:27015 -r 127.0.0.1:27010 -k maintell --raw-mode faketcp -a", "")
+			}
+		}
+
 		downStreamDataSize = 0
 		upStreamDataSize = 0
 		time.Sleep(1 * time.Second)

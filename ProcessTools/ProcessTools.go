@@ -1,4 +1,4 @@
-package Process
+package ProcessTools
 
 import (
 	"errors"
